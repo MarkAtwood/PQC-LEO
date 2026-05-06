@@ -39,13 +39,16 @@ Algorithm, Operation, intits, peakBytes, Heap, extHeap, Stack
 
 ## Open Issues
 
-| ID | Task |
-|---|---|
-| `PQC-LEO-v6o` | Epic: PQC benchmark driver for wolfCrypt |
-| `PQC-LEO-wl6` | Audit benchmark.c PQC output format |
-| `PQC-LEO-9ov` | Write `wolfcrypt/benchmark/pqc_bench.sh` |
-| `PQC-LEO-s8x` | Decide memory measurement approach |
-| `PQC-LEO-8f7` | Write `wolfcrypt/benchmark/README-pqc.md` |
+Dependency order: `4n5` → `law` → `{opn, 6ua}` → `h5r`
+
+| ID | P | Blocked by | Task |
+|---|---|---|---|
+| `PQC-LEO-v6o` | 1 | — | Epic: PQC benchmark driver for wolfCrypt |
+| `PQC-LEO-4n5` | 1 | — | Verify wolfssl builds with PQC flags (x86 + ARM) |
+| `PQC-LEO-law` | 1 | `4n5` | Write `wolfcrypt/benchmark/pqc_bench.sh` driver script |
+| `PQC-LEO-opn` | 1 | `law` | Write `wolfcrypt/benchmark/pqc_parse.py` CSV normalizer |
+| `PQC-LEO-6ua` | 1 | `law` | Decide and implement memory measurement approach |
+| `PQC-LEO-h5r` | 2 | `law, opn, 6ua` | Write `wolfcrypt/benchmark/README-pqc.md` |
 
 ---
 
