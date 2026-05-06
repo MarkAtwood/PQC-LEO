@@ -3,7 +3,9 @@
 This repo is a **format and methodology reference** for the wolfSSL PQC benchmark work.
 The primary deliverable lives in `~/WORK/wolfssl` on branch `feature/pqc-benchmark`.
 
-Do not file new issues here. Do not write new code here.
+Active issues are tracked **in this repo's beads database** even though the code
+being written lives in `~/WORK/wolfssl`. This is the single source of truth for
+`bd ready`, `bd show`, etc.
 
 ---
 
@@ -32,6 +34,18 @@ Algorithm | Operation | Operations | Seconds | ms/op | op/sec
 ```
 Algorithm, Operation, intits, peakBytes, Heap, extHeap, Stack
 ```
+
+---
+
+## Open Issues
+
+| ID | Task |
+|---|---|
+| `PQC-LEO-v6o` | Epic: PQC benchmark driver for wolfCrypt |
+| `PQC-LEO-wl6` | Audit benchmark.c PQC output format |
+| `PQC-LEO-9ov` | Write `wolfcrypt/benchmark/pqc_bench.sh` |
+| `PQC-LEO-s8x` | Decide memory measurement approach |
+| `PQC-LEO-8f7` | Write `wolfcrypt/benchmark/README-pqc.md` |
 
 ---
 
