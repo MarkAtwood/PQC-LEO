@@ -45,7 +45,7 @@
 # USAGE
 # ============================================================================
 #
-#   # x86_64 benchmark (AL2023, c5.2xlarge):
+#   # x86_64 benchmark (AL2023, c7i.2xlarge):
 #   ./scripts/aws/run-pqc-bench.sh AdministratorAccess-921772462201
 #
 #   # ARM64/Graviton benchmark:
@@ -90,7 +90,7 @@ if [[ "$ARM64" == "1" ]]; then
     AMI_NAME_PATTERN="al2023-ami-2023*-kernel-6*-arm64"
     INSTANCE_USER="ec2-user"
 else
-    : "${INSTANCE_TYPE:=c5.2xlarge}"    # Intel: 8 vCPU / 16 GB
+    : "${INSTANCE_TYPE:=c7i.2xlarge}"   # Intel Sapphire Rapids: 8 vCPU / 16 GB, AVX-512
     ARCH_SUFFIX=""
     KERN_ARCH="x86_64"
     # AL2023 x86_64 AMI
@@ -330,13 +330,63 @@ sudo dnf install -y -q \
     make \
     autoconf automake libtool \
     git \
-    python3
+    python3 \
+    kernel-tools   # provides cpupower for governor pinning
 
 echo "gcc: $(gcc --version | head -1)"
 echo "python3: $(python3 --version)"
 echo "git: $(git --version)"
 DEPS
 pass "Build dependencies installed"
+
+# ── Phase 1b: Pin CPU governor to performance ─────────────────────────────────
+# EC2 instances default to 'powersave' or 'schedutil' which allows the CPU to
+# clock down between operations, producing variable and artificially low
+# benchmark numbers.  'performance' holds the CPU at its maximum sustained
+# clock for the duration of the run.
+#
+# c7i (Sapphire Rapids): sustained 3.2 GHz all-core
+# c7g (Graviton3):       sustained 2.6 GHz all-core
+#
+# cpupower is best-effort: some instance types or kernels may not expose the
+# governor interface.  A warning is printed but the run continues — the
+# benchmark result header will note whether pinning succeeded.
+
+log "Pinning CPU governor to performance..."
+GOVERNOR_SET=$(remote_script <<'GOVERNOR'
+set -uo pipefail
+
+NCPU=$(nproc)
+echo "CPUs: $NCPU  arch: $(uname -m)"
+
+# Check current governor before changing
+CURRENT=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "unknown")
+echo "Current governor: $CURRENT"
+
+if [[ "$CURRENT" == "unknown" ]]; then
+    echo "WARN: cpufreq governor interface not available on this instance/kernel"
+    echo "GOVERNOR_OK=0"
+else
+    sudo cpupower frequency-set -g performance 2>&1 || {
+        echo "WARN: cpupower frequency-set failed (non-fatal)"
+        echo "GOVERNOR_OK=0"
+        exit 0
+    }
+    AFTER=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)
+    echo "Governor set to: $AFTER"
+    if [[ "$AFTER" == "performance" ]]; then
+        echo "GOVERNOR_OK=1"
+    else
+        echo "GOVERNOR_OK=0"
+    fi
+fi
+GOVERNOR
+)
+if echo "$GOVERNOR_SET" | grep -q "GOVERNOR_OK=1"; then
+    pass "CPU governor pinned to performance"
+else
+    echo "  WARN: CPU governor not pinned (results may show clock variability)" >&2
+fi
 
 # ── Phase 2: Clone wolfSSL ────────────────────────────────────────────────────
 
@@ -414,8 +464,18 @@ watch_serial 2400   # 40 min ceiling — serial console is best-effort
 remote_script <<'BENCH_RUN'
 set -euo pipefail
 cd ~/wolfssl
-./wolfcrypt/benchmark/pqc_bench.sh \
-    --output ~/pqc_results_raw.csv \
+
+# taskset -c 0-3: pin to the first 4 physical cores on a single socket.
+# c7i and c7g are single-socket so this is largely a no-op, but it prevents
+# the OS scheduler from migrating the benchmark process mid-run, which can
+# cause cache-cold restarts and inflated timing variance on SLH-DSA sign
+# (which takes ~1 second per call and is sensitive to migrations).
+# We use 4 cores rather than all 8 so the benchmark's single-threaded timed
+# loops aren't fighting the build parallelism from a concurrent make -j8.
+# The build step (make -j$(nproc)) runs before taskset takes effect.
+taskset -c 0-3 \
+    ./wolfcrypt/benchmark/pqc_bench.sh \
+        --output ~/pqc_results_raw.csv \
     2>&1 | tee ~/pqc_bench.log
 echo "pqc_bench.sh exit: $?"
 BENCH_RUN
@@ -471,6 +531,29 @@ scp -o StrictHostKeyChecking=no -i "$KEY_FILE" \
 
 pass "Results downloaded"
 
+# ── Write a metadata sidecar ──────────────────────────────────────────────────
+# Record the run environment alongside the result files so numbers are
+# self-describing when shared or archived.
+
+GOVERNOR_FINAL=$(remote \
+    'cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unknown')
+CPU_MODEL=$(remote \
+    'grep "^model name\|^Model name\|^CPU part" /proc/cpuinfo | head -1 | cut -d: -f2 | xargs')
+
+cat > "${LOCAL_PREFIX}_meta.txt" <<META
+run_id:        $RUN_ID
+date:          $(date -u +%Y-%m-%dT%H:%M:%SZ)
+instance_type: $INSTANCE_TYPE
+architecture:  $KERN_ARCH
+cpu_model:     $CPU_MODEL
+kernel:        $KVER
+governor:      $GOVERNOR_FINAL
+wolfssl_repo:  $WOLFSSL_REPO
+wolfssl_ref:   $WOLFSSL_REF
+wolfssl_head:  $WOLFSSL_HEAD
+taskset:       0-3
+META
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 DATA_ROWS=$(tail -n +2 "${LOCAL_PREFIX}_wolfssl.csv" | wc -l | tr -d ' ')
@@ -479,6 +562,8 @@ echo ""
 log "=========================================="
 log "Run: $RUN_ID"
 log "  Architecture:  $KERN_ARCH ($INSTANCE_TYPE)"
+log "  CPU:           $CPU_MODEL"
+log "  Governor:      $GOVERNOR_FINAL"
 log "  wolfSSL:       ${WOLFSSL_REF} @ ${WOLFSSL_HEAD:0:12}"
 log "  Kernel:        $KVER"
 log "  Data rows:     $DATA_ROWS"
@@ -486,5 +571,6 @@ log "  Raw CSV:       ${LOCAL_PREFIX}_raw.csv"
 log "  Wolfssl CSV:   ${LOCAL_PREFIX}_wolfssl.csv"
 log "  PQC-LEO PSV:   ${LOCAL_PREFIX}_pqcleo.psv"
 log "  Build log:     ${LOCAL_PREFIX}_bench.log"
+log "  Metadata:      ${LOCAL_PREFIX}_meta.txt"
 log "=========================================="
 log "RESULT: PASSED"
