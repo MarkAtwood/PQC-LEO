@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "PQC_LEO",
+  "project_id": "5c928642-fd46-4d32-b36f-7429ad1b51be"
+}
