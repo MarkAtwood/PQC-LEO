@@ -451,47 +451,51 @@ pass "CIRCL done"
 
 log "Normalising and merging all results..."
 
-# Copy pqc_parse.py onto the instance
+# Copy pqc_parse.py onto the instance.
+# It lives in the wolfssl working tree; use the known absolute path.
+PARSE_PY="$HOME/WORK/wolfssl/wolfcrypt/benchmark/pqc_parse.py"
+if [ ! -f "$PARSE_PY" ]; then
+    echo "ERROR: pqc_parse.py not found at $PARSE_PY" >&2; exit 1
+fi
 scp -o StrictHostKeyChecking=no -i "$KEY_FILE" \
-    "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../wolfssl/wolfcrypt/benchmark/pqc_parse.py" \
-    "${INSTANCE_USER}@${PUBLIC_IP}:~/pqc_parse.py" 2>/dev/null || \
-scp -o StrictHostKeyChecking=no -i "$KEY_FILE" \
-    "$HOME/WORK/wolfssl/wolfcrypt/benchmark/pqc_parse.py" \
-    "${INSTANCE_USER}@${PUBLIC_IP}:~/pqc_parse.py"
+    "$PARSE_PY" "${INSTANCE_USER}@${PUBLIC_IP}:pqc_parse.py"
 
 remote_script <<'NORMALISE'
 set -euo pipefail
-P="python3 ~/pqc_parse.py"
+PARSE="python3 $HOME/pqc_parse.py"
 
 # wolfSSL SHAKE
-$P --input-format=wolfssl --library=wolfSSL \
-    ~/wolfssl_raw.csv > ~/norm_wolfssl_shake.csv
+$PARSE --input-format=wolfssl --library=wolfSSL \
+    $HOME/wolfssl_raw.csv > $HOME/norm_wolfssl_shake.csv
 
 # wolfSSL SHA-2 SLH-DSA (append, skip header)
-$P --input-format=wolfssl --library=wolfSSL \
-    ~/wolfssl_slhdsa_sha2_raw.csv | tail -n +2 >> ~/norm_wolfssl_shake.csv
+[ -f "$HOME/wolfssl_slhdsa_sha2_raw.csv" ] && \
+    $PARSE --input-format=wolfssl --library=wolfSSL \
+        $HOME/wolfssl_slhdsa_sha2_raw.csv | tail -n +2 >> $HOME/norm_wolfssl_shake.csv || true
 
 # liboqs
-cat ~/liboqs_kem.txt ~/liboqs_sig.txt > ~/liboqs_all.txt
-$P --input-format=liboqs --library=liboqs \
-    ~/liboqs_all.txt > ~/norm_liboqs.csv
+cat $HOME/liboqs_kem.txt $HOME/liboqs_sig.txt > $HOME/liboqs_all.txt
+$PARSE --input-format=liboqs --library=liboqs \
+    $HOME/liboqs_all.txt > $HOME/norm_liboqs.csv
 
-# OpenSSL (combined KEM + SIG)
-$P --input-format=openssl --library=OpenSSL \
-    ~/openssl_pqc_mr.txt > ~/norm_openssl.csv
+# OpenSSL
+[ -f "$HOME/openssl_pqc_mr.txt" ] && \
+    $PARSE --input-format=openssl --library=OpenSSL \
+        $HOME/openssl_pqc_mr.txt > $HOME/norm_openssl.csv || echo "" > $HOME/norm_openssl.csv
 
 # CIRCL
-$P --input-format=circl --library=CIRCL \
-    ~/circl_all.txt > ~/norm_circl.csv
+[ -f "$HOME/circl_all.txt" ] && \
+    $PARSE --input-format=circl --library=CIRCL \
+        $HOME/circl_all.txt > $HOME/norm_circl.csv || echo "" > $HOME/norm_circl.csv
 
-# Merge: header from first file, data rows from all
-HEADER=$(head -1 ~/norm_wolfssl_shake.csv)
-echo "$HEADER" > ~/pqc_comparison.csv
-for f in ~/norm_wolfssl_shake.csv ~/norm_liboqs.csv ~/norm_openssl.csv ~/norm_circl.csv; do
-    [ -f "$f" ] && tail -n +2 "$f" >> ~/pqc_comparison.csv || true
+# Merge: header from wolfssl file, data rows from all
+HEADER=$(head -1 $HOME/norm_wolfssl_shake.csv)
+echo "$HEADER" > $HOME/pqc_comparison.csv
+for f in $HOME/norm_wolfssl_shake.csv $HOME/norm_liboqs.csv $HOME/norm_openssl.csv $HOME/norm_circl.csv; do
+    [ -f "$f" ] && tail -n +2 "$f" >> $HOME/pqc_comparison.csv || true
 done
 
-echo "Merged rows: $(wc -l < ~/pqc_comparison.csv)"
+echo "Merged rows: $(wc -l < $HOME/pqc_comparison.csv)"
 NORMALISE
 pass "Normalisation complete"
 
