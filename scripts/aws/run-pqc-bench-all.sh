@@ -322,7 +322,7 @@ pass "wolfSSL done (HEAD ${WOLFSSL_HEAD:0:12})"
 
 log "=== liboqs ==="
 watch_serial 2400
-remote_script <<LIBOQS
+remote_script <<LIBOQS || { echo "WARN: liboqs phase exited non-zero — continuing"; }
 set -euo pipefail
 echo "--- Cloning liboqs (${LIBOQS_REF}) ---"
 git clone --depth=1 --branch "${LIBOQS_REF}" \
@@ -338,22 +338,31 @@ cmake -S ~/liboqs -B ~/liboqs/build \
     2>&1 | tail -5
 cmake --build ~/liboqs/build --target speed_kem speed_sig -- -j\$(nproc) 2>&1 | tail -5
 
-echo "--- Running liboqs KEM benchmarks ---"
-# -d ${BENCH_SECS}: run each algorithm for N seconds
-taskset -c 0-3 ~/liboqs/build/tests/speed_kem -d ${BENCH_SECS} \
-    ML-KEM-512 ML-KEM-768 ML-KEM-1024 \
-    > ~/liboqs_kem.txt 2>&1
+echo "--- Running liboqs KEM benchmarks (all algorithms, one at a time) ---"
+# speed_kem / speed_sig accept only one <alg> per invocation.
+# Run each separately and append output; use || true so one failure
+# doesn't abort the whole phase.
+> ~/liboqs_kem.txt
+for alg in ML-KEM-512 ML-KEM-768 ML-KEM-1024; do
+    echo "  KEM: \$alg"
+    taskset -c 0-3 ~/liboqs/build/tests/speed_kem -d ${BENCH_SECS} "\$alg" \
+        >> ~/liboqs_kem.txt 2>&1 || echo "  WARN: speed_kem \$alg exited non-zero"
+done
 
-echo "--- Running liboqs signature benchmarks ---"
-taskset -c 0-3 ~/liboqs/build/tests/speed_sig -d ${BENCH_SECS} \
+echo "--- Running liboqs signature benchmarks (all algorithms, one at a time) ---"
+> ~/liboqs_sig.txt
+for alg in \
     ML-DSA-44 ML-DSA-65 ML-DSA-87 \
-    SLH-DSA-SHA2-128s SLH-DSA-SHAKE-128s \
-    SLH-DSA-SHA2-128f SLH-DSA-SHAKE-128f \
-    SLH-DSA-SHA2-192s SLH-DSA-SHAKE-192s \
-    SLH-DSA-SHA2-192f SLH-DSA-SHAKE-192f \
-    SLH-DSA-SHA2-256s SLH-DSA-SHAKE-256s \
-    SLH-DSA-SHA2-256f SLH-DSA-SHAKE-256f \
-    > ~/liboqs_sig.txt 2>&1
+    SLH-DSA-SHA2-128s  SLH-DSA-SHA2-128f \
+    SLH-DSA-SHA2-192s  SLH-DSA-SHA2-192f \
+    SLH-DSA-SHA2-256s  SLH-DSA-SHA2-256f \
+    SLH-DSA-SHAKE-128s SLH-DSA-SHAKE-128f \
+    SLH-DSA-SHAKE-192s SLH-DSA-SHAKE-192f \
+    SLH-DSA-SHAKE-256s SLH-DSA-SHAKE-256f; do
+    echo "  SIG: \$alg"
+    taskset -c 0-3 ~/liboqs/build/tests/speed_sig -d ${BENCH_SECS} "\$alg" \
+        >> ~/liboqs_sig.txt 2>&1 || echo "  WARN: speed_sig \$alg exited non-zero"
+done
 
 echo "liboqs DONE"
 LIBOQS
@@ -366,7 +375,7 @@ pass "liboqs done"
 
 log "=== OpenSSL ==="
 watch_serial 3600
-remote_script <<OPENSSL_BUILD
+remote_script <<OPENSSL_BUILD || { echo "WARN: OpenSSL phase exited non-zero — continuing"; }
 set -euo pipefail
 echo "--- Cloning OpenSSL (${OPENSSL_REF}) ---"
 git clone --depth=1 --branch "${OPENSSL_REF}" \
@@ -374,9 +383,11 @@ git clone --depth=1 --branch "${OPENSSL_REF}" \
 echo "HEAD: \$(git -C ~/openssl rev-parse HEAD)"
 
 echo "--- Configuring OpenSSL ---"
+# ML-KEM and ML-DSA are enabled by default in OpenSSL 3.5+; no extra flags needed.
+# no-shared: build static binary so it runs without LD_LIBRARY_PATH
+# no-tests: skip test compilation to save time
 cd ~/openssl
-./Configure --prefix=\$HOME/openssl-install --openssldir=\$HOME/openssl-install/etc \
-    enable-kem-schemes enable-ml-kem enable-ml-dsa \
+./Configure --prefix=\$HOME/openssl-install \
     no-shared no-tests \
     2>&1 | tail -5
 
@@ -408,7 +419,7 @@ pass "OpenSSL done"
 
 log "=== CIRCL ==="
 watch_serial 2400
-remote_script <<CIRCL_BUILD
+remote_script <<CIRCL_BUILD || { echo "WARN: CIRCL phase exited non-zero — continuing"; }
 set -euo pipefail
 echo "--- Cloning CIRCL (${CIRCL_REF}) ---"
 git clone --depth=1 --branch "${CIRCL_REF}" \
@@ -417,17 +428,18 @@ echo "HEAD: \$(git -C ~/circl rev-parse HEAD)"
 
 echo "--- Running CIRCL KEM benchmarks (ML-KEM) ---"
 cd ~/circl
-taskset -c 0-3 go test -bench "BenchmarkGenerateKeyPair|BenchmarkEncapsulate|BenchmarkDecapsulate" \
+taskset -c 0-3 go test \
+    -bench "BenchmarkGenerateKeyPair|BenchmarkEncapsulate|BenchmarkDecapsulate" \
     -benchtime="${BENCH_SECS}s" -run='^$' \
     ./kem/schemes/ \
-    2>&1 | tee ~/circl_kem.txt
+    2>&1 | tee ~/circl_kem.txt || echo "WARN: CIRCL KEM bench exited non-zero"
 
 echo "--- Running CIRCL signature benchmarks (ML-DSA, SLH-DSA) ---"
 taskset -c 0-3 go test \
     -bench "BenchmarkGenerateKeyPair|BenchmarkSign|BenchmarkVerify" \
     -benchtime="${BENCH_SECS}s" -run='^$' \
     ./sign/schemes/ \
-    2>&1 | tee ~/circl_sig.txt
+    2>&1 | tee ~/circl_sig.txt || echo "WARN: CIRCL sig bench exited non-zero"
 
 cat ~/circl_kem.txt ~/circl_sig.txt > ~/circl_all.txt
 echo "CIRCL DONE"
