@@ -353,12 +353,12 @@ echo "--- Running liboqs signature benchmarks (all algorithms, one at a time) --
 > ~/liboqs_sig.txt
 for alg in \
     ML-DSA-44 ML-DSA-65 ML-DSA-87 \
-    SLH-DSA-SHA2-128s  SLH-DSA-SHA2-128f \
-    SLH-DSA-SHA2-192s  SLH-DSA-SHA2-192f \
-    SLH-DSA-SHA2-256s  SLH-DSA-SHA2-256f \
-    SLH-DSA-SHAKE-128s SLH-DSA-SHAKE-128f \
-    SLH-DSA-SHAKE-192s SLH-DSA-SHAKE-192f \
-    SLH-DSA-SHAKE-256s SLH-DSA-SHAKE-256f; do
+    SLH_DSA_PURE_SHA2_128S  SLH_DSA_PURE_SHA2_128F \
+    SLH_DSA_PURE_SHA2_192S  SLH_DSA_PURE_SHA2_192F \
+    SLH_DSA_PURE_SHA2_256S  SLH_DSA_PURE_SHA2_256F \
+    SLH_DSA_PURE_SHAKE_128S SLH_DSA_PURE_SHAKE_128F \
+    SLH_DSA_PURE_SHAKE_192S SLH_DSA_PURE_SHAKE_192F \
+    SLH_DSA_PURE_SHAKE_256S SLH_DSA_PURE_SHAKE_256F; do
     echo "  SIG: \$alg"
     taskset -c 0-3 ~/liboqs/build/tests/speed_sig -d ${BENCH_SECS} "\$alg" \
         >> ~/liboqs_sig.txt 2>&1 || echo "  WARN: speed_sig \$alg exited non-zero"
@@ -404,8 +404,9 @@ taskset -c 0-3 apps/openssl speed -mr -seconds ${BENCH_SECS} \
     -signature-algorithms \
     > ~/openssl_sig_mr.txt 2>&1 || true
 
-# Filter to PQC only
-grep -E "^\+R1[5-9]|^\+R20" ~/openssl_kem_mr.txt ~/openssl_sig_mr.txt \
+# Merge and filter to PQC lines only (cat avoids filename: prefix from grep)
+cat ~/openssl_kem_mr.txt ~/openssl_sig_mr.txt \
+    | grep -E "^\+R1[5-9]|^\+R20" \
     | grep -iE "ML-KEM|ML-DSA" > ~/openssl_pqc_mr.txt || true
 
 echo "OpenSSL DONE"
