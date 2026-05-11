@@ -39,6 +39,12 @@
 #     OUTPUT_DIR        — local dir for downloaded results (default: ./results)
 #     WOLFSSL_REPO      — default: https://github.com/wolfSSL/wolfssl
 #     WOLFSSL_REF       — default: master
+#                         (override both to use a fork carrying pqc_bench.sh,
+#                          e.g. WOLFSSL_REPO=https://github.com/<you>/wolfssl
+#                          WOLFSSL_REF=feature/pqc-benchmark)
+#     PQC_BENCH_SH      — local path to pqc_bench.sh used as fallback when the
+#                         cloned wolfSSL branch lacks the script. Default:
+#                         $PQC_LEO_ROOT/../../WORK/wolfssl/wolfcrypt/benchmark/pqc_bench.sh
 #     DISK_SIZE_GB      — override default disk size (default: 30)
 #
 # ============================================================================
@@ -46,7 +52,7 @@
 # ============================================================================
 #
 #   # x86_64 benchmark (AL2023, c7i.2xlarge):
-#   ./scripts/aws/run-pqc-bench.sh AdministratorAccess-921772462201
+#   ./scripts/aws/run-pqc-bench.sh <profile>     # e.g. AdministratorAccess-<YOUR_ACCOUNT_ID>
 #
 #   # ARM64/Graviton benchmark:
 #   ARM64=1 ./scripts/aws/run-pqc-bench.sh <profile>
@@ -81,22 +87,21 @@ OUTPUT_DIR="${OUTPUT_DIR:-./results}"
 
 # ── Architecture settings ─────────────────────────────────────────────────────
 
+# AL2023 default user is "ec2-user" on both x86_64 and arm64 AMIs.
+# AMI owner 137112412989 is Amazon's public AL2023 publisher (same for both archs).
+AMI_OWNER="137112412989"
+INSTANCE_USER="ec2-user"
+
 if [[ "$ARM64" == "1" ]]; then
     : "${INSTANCE_TYPE:=c7g.2xlarge}"   # Graviton 3: 8 vCPU / 16 GB
     ARCH_SUFFIX="-arm64"
     KERN_ARCH="aarch64"
-    # AL2023 arm64 AMI (owner: Amazon; same release as x86 image used in verify)
-    AMI_OWNER="137112412989"
     AMI_NAME_PATTERN="al2023-ami-2023*-kernel-6*-arm64"
-    INSTANCE_USER="ec2-user"
 else
     : "${INSTANCE_TYPE:=c7i.2xlarge}"   # Intel Sapphire Rapids: 8 vCPU / 16 GB, AVX-512
     ARCH_SUFFIX=""
     KERN_ARCH="x86_64"
-    # AL2023 x86_64 AMI
-    AMI_OWNER="137112412989"
     AMI_NAME_PATTERN="al2023-ami-2023*-kernel-6*-x86_64"
-    INSTANCE_USER="ec2-user"
 fi
 
 # ── AWS CLI shorthand ─────────────────────────────────────────────────────────
@@ -418,7 +423,10 @@ PQC_LEO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 REMOTE_BENCH_DIR="\$HOME/wolfssl/wolfcrypt/benchmark"
 
-BENCH_SH_LOCAL="$PQC_LEO_ROOT/../../WORK/wolfssl/wolfcrypt/benchmark/pqc_bench.sh"
+# pqc_bench.sh is not vendored; it lives in the wolfssl tree. If the cloned
+# wolfSSL branch doesn't carry it (e.g. upstream master), fall back to a
+# user-supplied local path. PQC_BENCH_SH env var overrides the default.
+BENCH_SH_LOCAL="${PQC_BENCH_SH:-$PQC_LEO_ROOT/../../WORK/wolfssl/wolfcrypt/benchmark/pqc_bench.sh}"
 # pqc_parse.py is vendored in PQC-LEO; PQC-LEO is the source of truth.
 PARSE_PY_LOCAL="$PQC_LEO_ROOT/scripts/parsing_scripts/pqc_parse.py"
 

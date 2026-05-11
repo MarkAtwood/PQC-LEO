@@ -41,8 +41,11 @@
 #     KEEP_INSTANCE     — set to 1 to leave instance running for debugging
 #     SSH_KEY_PATH      — where to store ephemeral SSH key (default: /tmp)
 #     OUTPUT_DIR        — local dir for downloaded results (default: ./results)
-#     WOLFSSL_REPO      — default: https://github.com/MarkAtwood/wolfssl
-#     WOLFSSL_REF       — default: feature/pqc-benchmark
+#     WOLFSSL_REPO      — default: https://github.com/wolfSSL/wolfssl
+#     WOLFSSL_REF       — default: master
+#                         (override both to use a fork/branch carrying pqc_bench.sh,
+#                          e.g. WOLFSSL_REPO=https://github.com/<you>/wolfssl
+#                          WOLFSSL_REF=feature/pqc-benchmark)
 #     LIBOQS_REF        — liboqs git ref (default: main)
 #     OPENSSL_REF       — OpenSSL git ref (default: master)
 #     CIRCL_REF         — CIRCL git ref (default: master)
@@ -54,7 +57,7 @@
 # ============================================================================
 #
 #   # x86_64 (c7i.2xlarge, Intel Sapphire Rapids):
-#   ./scripts/aws/run-pqc-bench-all.sh AdministratorAccess-921772462201
+#   ./scripts/aws/run-pqc-bench-all.sh <profile>     # e.g. AdministratorAccess-<YOUR_ACCOUNT_ID>
 #
 #   # ARM64/Graviton (c7g.2xlarge):
 #   ARM64=1 ./scripts/aws/run-pqc-bench-all.sh <profile>
@@ -79,27 +82,27 @@ KEEP_INSTANCE="${KEEP_INSTANCE:-0}"
 SSH_KEY_PATH="${SSH_KEY_PATH:-/tmp}"
 DISK_SIZE_GB="${DISK_SIZE_GB:-40}"
 OUTPUT_DIR="${OUTPUT_DIR:-./results}"
-WOLFSSL_REPO="${WOLFSSL_REPO:-https://github.com/MarkAtwood/wolfssl}"
-WOLFSSL_REF="${WOLFSSL_REF:-feature/pqc-benchmark}"
+WOLFSSL_REPO="${WOLFSSL_REPO:-https://github.com/wolfSSL/wolfssl}"
+WOLFSSL_REF="${WOLFSSL_REF:-master}"
 LIBOQS_REF="${LIBOQS_REF:-main}"
 OPENSSL_REF="${OPENSSL_REF:-master}"
 CIRCL_REF="${CIRCL_REF:-master}"
 BENCH_SECS="${BENCH_SECS:-3}"
 
 # ── Architecture ──────────────────────────────────────────────────────────────
+# AL2023 default user is "ec2-user" on both x86_64 and arm64 AMIs.
+# AMI owner 137112412989 is Amazon's public AL2023 publisher (same for both archs).
+AMI_OWNER="137112412989"
+INSTANCE_USER="ec2-user"
 
 if [[ "$ARM64" == "1" ]]; then
     : "${INSTANCE_TYPE:=c7g.2xlarge}"
     KERN_ARCH="aarch64"
-    AMI_OWNER="137112412989"
     AMI_NAME_PATTERN="al2023-ami-2023*-kernel-6*-arm64"
-    INSTANCE_USER="ec2-user"
 else
     : "${INSTANCE_TYPE:=c7i.2xlarge}"
     KERN_ARCH="x86_64"
-    AMI_OWNER="137112412989"
     AMI_NAME_PATTERN="al2023-ami-2023*-kernel-6*-x86_64"
-    INSTANCE_USER="ec2-user"
 fi
 
 # ── AWS CLI shorthand ─────────────────────────────────────────────────────────
