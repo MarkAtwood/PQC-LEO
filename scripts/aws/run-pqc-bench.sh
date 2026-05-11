@@ -330,8 +330,12 @@ sudo dnf install -y -q \
     make \
     autoconf automake libtool \
     git \
-    python3 \
-    kernel-tools   # provides cpupower for governor pinning
+    python3
+# cpupower lives in kernel-tools or kernel6.18-tools depending on the running
+# kernel version. Both conflict with each other on AL2023 6.18 instances, and
+# one is already installed. Don't try to install by name — just use whichever
+# cpupower binary is already on PATH.
+echo "cpupower: $(command -v cpupower 2>/dev/null || echo '(not on PATH)')"
 
 echo "gcc: $(gcc --version | head -1)"
 echo "python3: $(python3 --version)"
