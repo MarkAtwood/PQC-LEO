@@ -43,6 +43,14 @@
 #                         (default: resolve via SSM kernel-default-${ARCH})
 #     KEEP_INSTANCE     — set to 1 to leave instance running for debugging
 #     SSH_KEY_PATH      — where to store ephemeral SSH key (default: /tmp)
+#     SSH_CIDR          — IPv4 CIDR allowed for SSH ingress. Default: auto-
+#                         detected caller IPv4 /32 via checkip.amazonaws.com.
+#                         Set explicitly if you sit behind NAT/CGNAT or want
+#                         to widen access. Use 0.0.0.0/0 to recreate the
+#                         legacy "world-open" behaviour (not recommended).
+#     SSH_CIDR_V6       — optional IPv6 CIDR. If non-empty, an additional SSH
+#                         ingress rule is authorised for this CIDR. No
+#                         auto-detection (set explicitly if you need it).
 #     OUTPUT_DIR        — local dir for downloaded results (default: ./results)
 #     WOLFSSL_REPO      — default: https://github.com/wolfSSL/wolfssl
 #     WOLFSSL_REF       — default: master
@@ -91,6 +99,14 @@ LIBOQS_REF="${LIBOQS_REF:-main}"
 OPENSSL_REF="${OPENSSL_REF:-master}"
 CIRCL_REF="${CIRCL_REF:-master}"
 BENCH_SECS="${BENCH_SECS:-3}"
+# SSH ingress restriction. If SSH_CIDR is empty, the caller's public IPv4
+# address is auto-detected via https://checkip.amazonaws.com and /32 is
+# applied. Set SSH_CIDR=0.0.0.0/0 to recreate the legacy "open to the world"
+# behaviour (not recommended). Set SSH_CIDR=<cidr> behind NAT/CGNAT where
+# auto-detection returns the wrong address. SSH_CIDR_V6 is optional and only
+# authorized if non-empty.
+SSH_CIDR="${SSH_CIDR:-}"
+SSH_CIDR_V6="${SSH_CIDR_V6:-}"
 
 # ── Architecture ──────────────────────────────────────────────────────────────
 # AL2023 default user is "ec2-user" on both x86_64 and arm64 AMIs.
@@ -114,8 +130,13 @@ A="--profile $AWS_PROFILE --region $AWS_REGION"
 
 RUN_ID="pqc-all-${KERN_ARCH}-$(date +%Y%m%d-%H%M%S)"
 KEY_NAME="$RUN_ID"
-SG_NAME="$RUN_ID"
+# pqc-leo- prefix on the SG name makes the resource identifiable in the AWS
+# console at a glance, separate from any other ad-hoc SGs in the account.
+SG_NAME="pqc-leo-$RUN_ID"
 KEY_FILE="$SSH_KEY_PATH/${RUN_ID}.pem"
+
+# Shared resource tags applied to instance, KP, SG, and EBS volume.
+COMMON_TAGS="{Key=Name,Value=$RUN_ID},{Key=project,Value=pqc-leo},{Key=run-id,Value=$RUN_ID}"
 
 INSTANCE_ID=""
 SG_ID=""
@@ -126,6 +147,41 @@ SERIAL_PID=""
 
 log()  { echo "=== $(date +%H:%M:%S) $*"; }
 pass() { echo "  PASS: $*"; }
+fail() { echo "  FAIL: $*" >&2; }
+
+# Resolve the caller's public IPv4 via checkip.amazonaws.com when SSH_CIDR is
+# unset. checkip.amazonaws.com returns the IP as bare text plus a trailing
+# newline; tr strips whitespace. On failure the user must set SSH_CIDR
+# explicitly (we never silently fall back to 0.0.0.0/0).
+resolve_ssh_cidr() {
+    if [[ -n "$SSH_CIDR" ]]; then return 0; fi
+    local my_ip
+    my_ip=$(curl -fsS --retry 3 --max-time 10 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]')
+    if [[ -z "$my_ip" ]]; then
+        echo "ERROR: failed to auto-detect public IP for SSH ingress." >&2
+        echo "Set SSH_CIDR explicitly, e.g. SSH_CIDR=203.0.113.5/32 $0 $AWS_PROFILE" >&2
+        exit 1
+    fi
+    SSH_CIDR="${my_ip}/32"
+}
+
+# Retry delete-security-group up to N times; the SG can briefly hold a
+# DependencyViolation after terminate-instances because the ENI takes a few
+# seconds to detach.
+delete_sg_with_retry() {
+    local sg_id="$1"
+    local attempts=10
+    local delay=5
+    local i
+    for ((i=1; i<=attempts; i++)); do
+        if aws ec2 delete-security-group $A --group-id "$sg_id" 2>/dev/null; then
+            return 0
+        fi
+        sleep "$delay"
+    done
+    fail "failed to delete SG $sg_id after $attempts attempts (manual cleanup required)"
+    return 1
+}
 
 remote() {
     ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
@@ -183,8 +239,14 @@ cleanup() {
             --query 'TerminatingInstances[0].CurrentState.Name' --output text 2>/dev/null || true
         aws ec2 wait instance-terminated $A --instance-ids "$INSTANCE_ID" 2>/dev/null || sleep 30
     }
-    [[ -n "${KEY_NAME:-}" ]] && aws ec2 delete-key-pair $A --key-name "$KEY_NAME" 2>/dev/null || true
-    [[ -n "${SG_ID:-}" ]]    && aws ec2 delete-security-group $A --group-id "$SG_ID" 2>/dev/null || true
+    if [[ -n "${KEY_NAME:-}" ]]; then
+        aws ec2 delete-key-pair $A --key-name "$KEY_NAME" 2>/dev/null || true
+    fi
+    if [[ -n "${SG_ID:-}" ]]; then
+        # delete-security-group can DependencyViolation while the terminated
+        # instance's ENI is still detaching. Retry rather than leak the SG.
+        delete_sg_with_retry "$SG_ID" || true
+    fi
     rm -f "$KEY_FILE"
     log "Cleanup complete"; return $rc
 }
@@ -212,17 +274,32 @@ log "AMI: $AMI_ID"
 
 log "Creating SSH key pair: $KEY_NAME"
 aws ec2 create-key-pair $A --key-name "$KEY_NAME" --key-type rsa --key-format pem \
+    --tag-specifications \
+        "ResourceType=key-pair,Tags=[$COMMON_TAGS]" \
     --query 'KeyMaterial' --output text > "$KEY_FILE"
 chmod 600 "$KEY_FILE"
+
+# Resolve SSH ingress CIDR (auto-detect public IP unless caller set SSH_CIDR).
+resolve_ssh_cidr
 
 log "Creating security group: $SG_NAME"
 VPC_ID=$(aws ec2 describe-vpcs $A --filters "Name=is-default,Values=true" \
     --query 'Vpcs[0].VpcId' --output text)
 SG_ID=$(aws ec2 create-security-group $A --group-name "$SG_NAME" \
     --description "pqc-bench-all ($RUN_ID)" --vpc-id "$VPC_ID" \
+    --tag-specifications \
+        "ResourceType=security-group,Tags=[$COMMON_TAGS]" \
     --query 'GroupId' --output text)
+log "Authorising SSH ingress: $SSH_CIDR"
 aws ec2 authorize-security-group-ingress $A --group-id "$SG_ID" \
-    --protocol tcp --port 22 --cidr 0.0.0.0/0 > /dev/null
+    --protocol tcp --port 22 --cidr "$SSH_CIDR" > /dev/null
+if [[ -n "$SSH_CIDR_V6" ]]; then
+    log "Authorising SSH ingress (IPv6): $SSH_CIDR_V6"
+    aws ec2 authorize-security-group-ingress $A --group-id "$SG_ID" \
+        --ip-permissions \
+            "IpProtocol=tcp,FromPort=22,ToPort=22,Ipv6Ranges=[{CidrIpv6=$SSH_CIDR_V6}]" \
+        > /dev/null
+fi
 
 log "Launching $INSTANCE_TYPE..."
 INSTANCE_ID=$(aws ec2 run-instances $A \
@@ -231,7 +308,8 @@ INSTANCE_ID=$(aws ec2 run-instances $A \
     --block-device-mappings \
         "[{\"DeviceName\":\"/dev/xvda\",\"Ebs\":{\"VolumeSize\":${DISK_SIZE_GB},\"VolumeType\":\"gp3\"}}]" \
     --tag-specifications \
-        "ResourceType=instance,Tags=[{Key=Name,Value=$RUN_ID},{Key=Project,Value=pqc-bench-all}]" \
+        "ResourceType=instance,Tags=[$COMMON_TAGS]" \
+        "ResourceType=volume,Tags=[$COMMON_TAGS]" \
     --query 'Instances[0].InstanceId' --output text)
 log "Instance: $INSTANCE_ID"
 
