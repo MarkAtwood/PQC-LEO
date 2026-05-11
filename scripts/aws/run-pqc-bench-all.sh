@@ -20,11 +20,12 @@
 #
 #   2. IAM permissions:
 #        ec2:RunInstances, TerminateInstances, DescribeInstances,
-#        DescribeImages, DescribeVpcs,
+#        DescribeVpcs,
 #        ec2:CreateKeyPair, DeleteKeyPair,
 #        ec2:CreateSecurityGroup, DeleteSecurityGroup,
 #        ec2:AuthorizeSecurityGroupIngress, ec2:CreateTags,
 #        ec2-instance-connect:SendSerialConsoleSSHPublicKey,
+#        ssm:GetParameter   (for /aws/service/ami-amazon-linux-latest/* lookup),
 #        sts:GetCallerIdentity
 #
 # ============================================================================
@@ -38,6 +39,8 @@
 #     AWS_REGION        — default: us-west-2
 #     ARM64             — set to 1 for ARM64/Graviton (c7g.2xlarge)
 #     INSTANCE_TYPE     — override default instance type
+#     AMI_ID            — pin a specific AMI ID for reproducible runs
+#                         (default: resolve via SSM kernel-default-${ARCH})
 #     KEEP_INSTANCE     — set to 1 to leave instance running for debugging
 #     SSH_KEY_PATH      — where to store ephemeral SSH key (default: /tmp)
 #     OUTPUT_DIR        — local dir for downloaded results (default: ./results)
@@ -91,18 +94,16 @@ BENCH_SECS="${BENCH_SECS:-3}"
 
 # ── Architecture ──────────────────────────────────────────────────────────────
 # AL2023 default user is "ec2-user" on both x86_64 and arm64 AMIs.
-# AMI owner 137112412989 is Amazon's public AL2023 publisher (same for both archs).
-AMI_OWNER="137112412989"
 INSTANCE_USER="ec2-user"
 
 if [[ "$ARM64" == "1" ]]; then
     : "${INSTANCE_TYPE:=c7g.2xlarge}"
     KERN_ARCH="aarch64"
-    AMI_NAME_PATTERN="al2023-ami-2023*-kernel-6*-arm64"
+    SSM_ARCH="arm64"
 else
     : "${INSTANCE_TYPE:=c7i.2xlarge}"
     KERN_ARCH="x86_64"
-    AMI_NAME_PATTERN="al2023-ami-2023*-kernel-6*-x86_64"
+    SSM_ARCH="x86_64"
 fi
 
 # ── AWS CLI shorthand ─────────────────────────────────────────────────────────
@@ -195,11 +196,18 @@ log "Verifying AWS credentials (profile=$AWS_PROFILE region=$AWS_REGION)"
 CALLER=$(aws sts get-caller-identity $A --query 'Arn' --output text)
 log "Authenticated as: $CALLER"
 
-log "Finding latest AL2023 ${KERN_ARCH} AMI..."
-AMI_ID=$(aws ec2 describe-images $A --owners "$AMI_OWNER" \
-    --filters "Name=name,Values=${AMI_NAME_PATTERN}" "Name=state,Values=available" \
-    --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' --output text)
-[[ -z "$AMI_ID" || "$AMI_ID" == "None" ]] && { echo "ERROR: AMI not found"; exit 1; }
+# Resolve AMI via AWS-curated SSM Public Parameter (deterministic; eliminates
+# the nondeterministic 'reverse-sort-by-CreationDate then pick first' lookup
+# that ties between multiple kernel-6.x variants published with identical
+# timestamps). AMI_ID env var lets callers pin a specific AMI for reproducible
+# benchmark runs.
+if [[ -z "${AMI_ID:-}" ]]; then
+    SSM_PARAM="/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-${SSM_ARCH}"
+    log "Resolving AL2023 ${KERN_ARCH} AMI via SSM: $SSM_PARAM"
+    AMI_ID=$(aws ssm get-parameter $A --name "$SSM_PARAM" \
+        --query 'Parameter.Value' --output text)
+    [[ -z "$AMI_ID" || "$AMI_ID" == "None" ]] && { echo "ERROR: SSM parameter not found: $SSM_PARAM" >&2; exit 1; }
+fi
 log "AMI: $AMI_ID"
 
 log "Creating SSH key pair: $KEY_NAME"
