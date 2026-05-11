@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (c) 2026 Mark Atwood
+# SPDX-License-Identifier: MIT
 # scripts/aws/run-pqc-bench.sh
 #
 # Provisions an EC2 instance, builds wolfSSL with PQC flags, runs the PQC
