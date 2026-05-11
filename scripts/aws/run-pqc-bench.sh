@@ -419,11 +419,11 @@ PQC_LEO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 REMOTE_BENCH_DIR="\$HOME/wolfssl/wolfcrypt/benchmark"
 
 BENCH_SH_LOCAL="$PQC_LEO_ROOT/../../WORK/wolfssl/wolfcrypt/benchmark/pqc_bench.sh"
-PARSE_PY_LOCAL="$PQC_LEO_ROOT/../../WORK/wolfssl/wolfcrypt/benchmark/pqc_parse.py"
+# pqc_parse.py is vendored in PQC-LEO; PQC-LEO is the source of truth.
+PARSE_PY_LOCAL="$PQC_LEO_ROOT/scripts/parsing_scripts/pqc_parse.py"
 
-# Check if scripts already exist on the remote (cloned from the branch).
+# pqc_bench.sh still lives in the wolfssl benchmark dir; check the remote first.
 BENCH_EXISTS=$(remote "test -f ${REMOTE_BENCH_DIR}/pqc_bench.sh && echo yes || echo no")
-PARSE_EXISTS=$(remote "test -f ${REMOTE_BENCH_DIR}/pqc_parse.py && echo yes || echo no")
 
 if [[ "$BENCH_EXISTS" == "no" ]]; then
     if [[ -f "$BENCH_SH_LOCAL" ]]; then
@@ -441,21 +441,19 @@ else
     pass "pqc_bench.sh present in cloned branch"
 fi
 
-if [[ "$PARSE_EXISTS" == "no" ]]; then
-    if [[ -f "$PARSE_PY_LOCAL" ]]; then
-        log "pqc_parse.py not in cloned branch — copying from local..."
-        scp -o StrictHostKeyChecking=no -i "$KEY_FILE" \
-            "$PARSE_PY_LOCAL" \
-            "${INSTANCE_USER}@${PUBLIC_IP}:${REMOTE_BENCH_DIR}/pqc_parse.py"
-        remote "chmod +x ${REMOTE_BENCH_DIR}/pqc_parse.py"
-        pass "pqc_parse.py copied from local"
-    else
-        echo "ERROR: pqc_parse.py not found in clone or locally at $PARSE_PY_LOCAL" >&2
-        exit 1
-    fi
-else
-    pass "pqc_parse.py present in cloned branch"
+# Always copy pqc_parse.py from PQC-LEO (authoritative). The cloned wolfssl
+# branch may carry a stale copy; the vendored PQC-LEO version is the one we
+# normalise against.
+if [[ ! -f "$PARSE_PY_LOCAL" ]]; then
+    echo "ERROR: pqc_parse.py not found at $PARSE_PY_LOCAL" >&2
+    exit 1
 fi
+log "Copying pqc_parse.py from PQC-LEO vendored location..."
+scp -o StrictHostKeyChecking=no -i "$KEY_FILE" \
+    "$PARSE_PY_LOCAL" \
+    "${INSTANCE_USER}@${PUBLIC_IP}:${REMOTE_BENCH_DIR}/pqc_parse.py"
+remote "chmod +x ${REMOTE_BENCH_DIR}/pqc_parse.py"
+pass "pqc_parse.py copied from PQC-LEO"
 
 # ── Phase 4: Build and run benchmarks ────────────────────────────────────────
 # pqc_bench.sh handles configure + make + benchmark runs in one call.
@@ -493,18 +491,16 @@ remote_script <<'NORMALISE'
 set -euo pipefail
 cd ~/wolfssl
 
-# wolfssl normalised format
+# wolfssl normalised format (default output format; stdout redirect to file)
 python3 wolfcrypt/benchmark/pqc_parse.py \
-    --format=wolfssl \
-    --output ~/pqc_results_wolfssl.csv \
-    ~/pqc_results_raw.csv
+    --input-format=wolfssl --library=wolfSSL \
+    ~/pqc_results_raw.csv > ~/pqc_results_wolfssl.csv
 echo "wolfssl CSV rows: $(wc -l < ~/pqc_results_wolfssl.csv)"
 
 # pqcleo pipe-delimited format for cross-library comparison
 python3 wolfcrypt/benchmark/pqc_parse.py \
-    --format=pqcleo \
-    --output ~/pqc_results_pqcleo.psv \
-    ~/pqc_results_raw.csv
+    --input-format=wolfssl --library=wolfSSL --format=pqcleo \
+    ~/pqc_results_raw.csv > ~/pqc_results_pqcleo.psv
 echo "pqcleo PSV rows: $(wc -l < ~/pqc_results_pqcleo.psv)"
 NORMALISE
 pass "Output normalised"

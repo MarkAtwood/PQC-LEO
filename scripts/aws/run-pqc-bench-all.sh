@@ -453,8 +453,11 @@ pass "CIRCL done"
 log "Normalising and merging all results..."
 
 # Copy pqc_parse.py onto the instance.
-# It lives in the wolfssl working tree; use the known absolute path.
-PARSE_PY="$HOME/WORK/wolfssl/wolfcrypt/benchmark/pqc_parse.py"
+# pqc_parse.py is vendored in PQC-LEO at scripts/parsing_scripts/pqc_parse.py;
+# PQC-LEO is the source of truth.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PQC_LEO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PARSE_PY="$PQC_LEO_ROOT/scripts/parsing_scripts/pqc_parse.py"
 if [ ! -f "$PARSE_PY" ]; then
     echo "ERROR: pqc_parse.py not found at $PARSE_PY" >&2; exit 1
 fi
