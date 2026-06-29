@@ -105,7 +105,6 @@ bd create --title="..." --type=task --priority=2 --deps discovered-from:<id> --j
 
 ```bash
 bd close <finished-ids>
-bd dolt push
 git pull --rebase
 git push
 git status   # must show "up to date with origin"
