@@ -184,6 +184,18 @@ delete_sg_with_retry() {
     return 1
 }
 
+# Auto-terminate if idle: CPU <5% avg for 16 x 15min periods (4 hours)
+attach_idle_kill() {
+    local iid="$1" region="$2"
+    aws cloudwatch put-metric-alarm --profile "$AWS_PROFILE" --region "$region" \
+        --alarm-name "idle-kill-$iid" \
+        --namespace AWS/EC2 --metric-name CPUUtilization \
+        --dimensions Name=InstanceId,Value="$iid" \
+        --statistic Average --period 900 --evaluation-periods 16 \
+        --threshold 5 --comparison-operator LessThanThreshold \
+        --alarm-actions "arn:aws:automate:${region}:ec2:terminate"
+}
+
 remote() {
     ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
         -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
@@ -238,6 +250,8 @@ cleanup() {
     [[ -n "$INSTANCE_ID" ]] && {
         aws ec2 terminate-instances $A --instance-ids "$INSTANCE_ID" \
             --query 'TerminatingInstances[0].CurrentState.Name' --output text 2>/dev/null || true
+        aws cloudwatch delete-alarms --profile "$AWS_PROFILE" --region "$AWS_REGION" \
+            --alarm-names "idle-kill-$INSTANCE_ID" 2>/dev/null || true
         aws ec2 wait instance-terminated $A --instance-ids "$INSTANCE_ID" 2>/dev/null || sleep 30
     }
     if [[ -n "${KEY_NAME:-}" ]]; then
@@ -312,6 +326,7 @@ INSTANCE_ID=$(aws ec2 run-instances $A \
         "ResourceType=instance,Tags=[$COMMON_TAGS]" \
         "ResourceType=volume,Tags=[$COMMON_TAGS]" \
     --query 'Instances[0].InstanceId' --output text)
+attach_idle_kill "$INSTANCE_ID" "$AWS_REGION"
 log "Instance: $INSTANCE_ID"
 
 aws ec2 wait instance-running $A --instance-ids "$INSTANCE_ID"
