@@ -111,3 +111,7 @@ git status   # must show "up to date with origin"
 ```
 
 <!-- END BEADS INTEGRATION -->
+
+## AI-to-AI PR Replies
+
+When an AI-drafted reply responds to another AI's PR comment (Copilot, Skoll, or any bot reviewer), preface the reply with "AItoAI: ". Replies to human reviewers never carry the prefix.
